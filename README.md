@@ -1,27 +1,84 @@
 # FasalFlow
 
-FasalFlow is an agricultural market-intelligence and decision-support platform designed around two primary user roles: farmers and cold-storage operators.
+Agricultural market-intelligence and decision-support platform for farmers and cold-storage operators.
 
-## Current scope
+## MVP scope
 
-The first release is a website frontend with role-based login and a modular backend. Development uses synthetic/test data so external government APIs are not required.
+- Website frontend only
+- Two primary login roles:
+  - Farmer
+  - Cold-storage operator
+- FastAPI backend
+- PostgreSQL + PostGIS
+- Synthetic/test data for development
+- Government/private data providers added later through isolated adapters
 
-## Repository structure
+## Repository layout
 
-- `frontend/` — web application, authentication flows, dashboards and shared UI
-- `backend/` — FastAPI application, database models, services and APIs
-- `data/` — synthetic development data and seed files
-- `docs/` — architecture and API documentation
-- `infra/` — local development and deployment configuration
-- `tests/` — cross-component/integration test assets
+```
+fasalflow/
+├── frontend/                  # React + TypeScript website
+│   ├── public/
+│   └── src/
+│       ├── app/               # app-level configuration
+│       ├── assets/
+│       ├── components/        # shared components
+│       │   └── ui/
+│       ├── features/
+│       │   ├── auth/          # login, session and role guards
+│       │   ├── farmer/        # farmer dashboard and workflows
+│       │   ├── cold-store/    # cold-store dashboard and workflows
+│       │   ├── intelligence/  # charts/cards for backend intelligence
+│       │   └── market/        # supporting market views
+│       ├── layouts/
+│       ├── lib/
+│       │   ├── api/
+│       │   └── auth/
+│       ├── routes/
+│       ├── types/
+│       └── utils/
+│
+├── backend/                   # FastAPI API
+│   ├── app/
+│   │   ├── api/v1/endpoints/  # HTTP API endpoints
+│   │   ├── auth/              # authentication and authorization
+│   │   ├── core/              # settings and application config
+│   │   ├── db/                # database/session setup
+│   │   ├── ingestion/         # synthetic + future external providers
+│   │   │   ├── providers/
+│   │   │   └── normalizers/
+│   │   ├── intelligence/
+│   │   │   ├── features/
+│   │   │   ├── forecasting/
+│   │   │   ├── risk/
+│   │   │   └── recommendations/
+│   │   ├── models/            # SQLAlchemy models
+│   │   ├── repositories/      # data-access layer
+│   │   ├── schemas/           # Pydantic schemas
+│   │   ├── services/          # domain/application services
+│   │   └── utils/
+│   ├── alembic/               # database migrations
+│   └── tests/
+│
+├── data/
+│   ├── raw/                   # raw imported data
+│   ├── processed/             # normalized datasets
+│   └── sample/                # synthetic development data
+├── docs/                      # architecture and implementation docs
+├── infra/                     # infrastructure/deployment config
+├── scripts/                   # developer utilities
+├── tests/                     # cross-component tests
+├── docker-compose.yml
+└── .env.example
+```
 
-## Primary roles
+## Design principle
 
-- Farmer
-- Cold-storage operator
+The intelligence engine is role-aware:
 
-Buyer and market datasets can be used as supporting data sources without making them primary login roles in the MVP.
+- **Farmer intelligence:** selling/storage timing, surplus, price-pressure and unsold-produce risks.
+- **Cold-store intelligence:** capacity, inventory, release-pressure, aging and demand risks.
 
-## Development principle
+Both consume the same normalized market state but produce different recommendations.
 
-External data providers must remain replaceable. Synthetic datasets and provider interfaces will be used first; government/API integrations can be added later without changing the core intelligence layer.
+External data sources are never hard-wired into business logic. Synthetic providers are used first so development and demos do not depend on the availability of government APIs.
