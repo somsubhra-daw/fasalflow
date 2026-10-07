@@ -279,6 +279,7 @@ def cold_store_recommendations(
 def price_forecast(
     commodity_id: int = Query(default=1),
     district: str = Query(default="Purba Bardhaman"),
+    window_days: int = Query(default=7, ge=1, le=30),
     db: Session = Depends(get_db),
 ) -> ForecastResult:
     """Statistical price forecast with confidence metric and metadata."""

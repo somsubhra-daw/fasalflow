@@ -235,7 +235,46 @@ def test_buyer_and_demand_workflow_with_internal_auth(client_with_db):
     active_demands = client_with_db.get("/api/v1/buyers/demand?commodity_id=1&date_window=2026-10-15").json()
     assert len(active_demands) == 1
     assert active_demands[0]["buyer_id"] == buyer_id
+    assert active_demands[0]["buyer_district"] == "Kolkata"
 
     out_of_window = client_with_db.get("/api/v1/buyers/demand?commodity_id=1&date_window=2026-11-01").json()
     assert len(out_of_window) == 0
+
+
+def test_buyer_demand_contract_includes_buyer_district(client_with_db):
+    internal_headers = {"X-Internal-Key": "fasalflow_internal_secret_key_change_in_production"}
+
+    # 1. Create a buyer in Purba Bardhaman
+    buyer_res = client_with_db.post("/api/v1/buyers", headers=internal_headers, json={
+        "name": "Burdwan Agri Logistics",
+        "buyer_type": "WHOLESALER",
+        "district": "Purba Bardhaman",
+    })
+    assert buyer_res.status_code == 201
+    buyer_id = buyer_res.json()["id"]
+
+    # 2. Demand creation returns buyer_district
+    demand_res = client_with_db.post("/api/v1/buyers/demand", headers=internal_headers, json={
+        "buyer_id": buyer_id,
+        "commodity_id": 1,
+        "quantity_kg": 25000.0,
+        "required_from": "2026-10-01",
+        "required_until": "2026-10-31",
+        "max_price_per_kg": 23.00,
+    })
+    assert demand_res.status_code == 201
+    demand_data = demand_res.json()
+    assert "buyer_district" in demand_data
+    assert demand_data["buyer_district"] == "Purba Bardhaman"
+
+    # 3. Demand listing returns buyer_district
+    listing_res = client_with_db.get("/api/v1/buyers/demand?commodity_id=1")
+    assert listing_res.status_code == 200
+    demands = listing_res.json()
+    assert len(demands) >= 1
+    matching = [d for d in demands if d["id"] == demand_data["id"]]
+    assert len(matching) == 1
+    assert "buyer_district" in matching[0]
+    assert matching[0]["buyer_district"] == "Purba Bardhaman"
+
 

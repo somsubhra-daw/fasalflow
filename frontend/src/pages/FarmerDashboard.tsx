@@ -14,16 +14,20 @@ export const FarmerDashboard: React.FC = () => {
       try {
         setLoading(true);
         setError(null);
-        const [dashResult, buyerResult] = await Promise.all([
-          fetchFarmerDashboard(1, "Purba Bardhaman", 7),
-          fetchBuyerDemands(1),
-        ]);
+        const dashResult = await fetchFarmerDashboard(1, "Purba Bardhaman", 7);
         setData(dashResult);
-        setBuyers(buyerResult);
       } catch (err: any) {
         setError(err?.message || "Failed to load farmer intelligence");
       } finally {
         setLoading(false);
+      }
+
+      // Secondary request: load active buyer demands defensively
+      try {
+        const buyerResult = await fetchBuyerDemands(1);
+        setBuyers(buyerResult || []);
+      } catch (err) {
+        console.warn("Non-fatal: could not load secondary buyer demand list:", err);
       }
     }
     loadData();
@@ -216,7 +220,7 @@ export const FarmerDashboard: React.FC = () => {
           Personal & Market Risk Analysis
         </h2>
         <div className="risks-grid">
-          {risks.map((r, idx) => (
+          {(risks || []).map((r, idx) => (
             <div key={idx} className="risk-item-card">
               <div className="risk-item-header">
                 <span className="risk-item-name">{formatActionTitle(r.risk_type)}</span>
@@ -288,20 +292,24 @@ export const FarmerDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {buyers.slice(0, 5).map((b) => (
-                    <tr key={b.id}>
-                      <td style={{ fontWeight: 600 }}>{b.buyer_name}</td>
-                      <td>
-                        <span className={b.buyer_district.toLowerCase().includes("bardhaman") ? "badge-risk-low" : "badge-neutral"}>
-                          {b.buyer_district}
-                        </span>
-                      </td>
-                      <td>{formatWeight(b.quantity_kg)}</td>
-                      <td style={{ fontWeight: 700, color: "var(--primary-700)" }}>
-                        {b.max_price_per_kg ? formatCurrency(b.max_price_per_kg) : "Negotiable"}
-                      </td>
-                    </tr>
-                  ))}
+                  {buyers.slice(0, 5).map((b) => {
+                    const districtName = b.buyer_district || "District Not Specified";
+                    const isLocal = districtName.toLowerCase().includes("bardhaman");
+                    return (
+                      <tr key={b.id}>
+                        <td style={{ fontWeight: 600 }}>{b.buyer_name}</td>
+                        <td>
+                          <span className={isLocal ? "badge-risk-low" : "badge-neutral"}>
+                            {districtName}
+                          </span>
+                        </td>
+                        <td>{formatWeight(b.quantity_kg)}</td>
+                        <td style={{ fontWeight: 700, color: "var(--primary-700)" }}>
+                          {b.max_price_per_kg ? formatCurrency(b.max_price_per_kg) : "Negotiable"}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

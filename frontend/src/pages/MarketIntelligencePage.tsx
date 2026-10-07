@@ -29,22 +29,30 @@ export const MarketIntelligencePage: React.FC = () => {
         setError(null);
         // 1. Fetch Purba Bardhaman Mandis
         const marketList = await fetchMarkets("Purba Bardhaman");
-        setMarkets(marketList);
-        if (marketList.length > 0) {
+        setMarkets(marketList || []);
+        if (marketList && marketList.length > 0) {
           setSelectedMarketId(marketList[0].id);
         }
-
-        // 2. Fetch Price Forecast
-        const forecastData = await fetchPriceForecast(1, "Purba Bardhaman", 7);
-        setForecast(forecastData);
-
-        // 3. Fetch Buyer Demands
-        const demandList = await fetchBuyerDemands(1);
-        setDemands(demandList);
       } catch (err: any) {
         setError(err?.message || "Failed to load market intelligence data");
       } finally {
         setLoading(false);
+      }
+
+      // 2. Fetch Price Forecast independently
+      try {
+        const forecastData = await fetchPriceForecast(1, "Purba Bardhaman", 7);
+        setForecast(forecastData);
+      } catch (err) {
+        console.warn("Non-fatal: could not load price forecast:", err);
+      }
+
+      // 3. Fetch Buyer Demands independently
+      try {
+        const demandList = await fetchBuyerDemands(1);
+        setDemands(demandList || []);
+      } catch (err) {
+        console.warn("Non-fatal: could not load buyer demands:", err);
       }
     }
     init();
@@ -272,27 +280,31 @@ export const MarketIntelligencePage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {demands.map((d) => (
-                  <tr key={d.id}>
-                    <td style={{ fontWeight: 700 }}>{d.buyer_name}</td>
-                    <td>
-                      <span className={d.buyer_district.toLowerCase().includes("bardhaman") ? "badge-risk-low" : "badge-neutral"}>
-                        {d.buyer_district}
-                      </span>
-                    </td>
-                    <td style={{ fontWeight: 600 }}>{formatWeight(d.quantity_kg)}</td>
-                    <td>{d.quality_grade || "All Grades"}</td>
-                    <td style={{ color: "var(--primary-700)", fontWeight: 700 }}>
-                      {d.max_price_per_kg ? formatCurrency(d.max_price_per_kg) : "Negotiable"}
-                    </td>
-                    <td style={{ fontSize: "0.82rem", color: "var(--slate-600)" }}>
-                      {d.required_from} to {d.required_until}
-                    </td>
-                    <td>
-                      <span className="badge-neutral">{d.status}</span>
-                    </td>
-                  </tr>
-                ))}
+                {demands.map((d) => {
+                  const districtName = d.buyer_district || "District Not Specified";
+                  const isLocal = districtName.toLowerCase().includes("bardhaman");
+                  return (
+                    <tr key={d.id}>
+                      <td style={{ fontWeight: 700 }}>{d.buyer_name}</td>
+                      <td>
+                        <span className={isLocal ? "badge-risk-low" : "badge-neutral"}>
+                          {districtName}
+                        </span>
+                      </td>
+                      <td style={{ fontWeight: 600 }}>{formatWeight(d.quantity_kg)}</td>
+                      <td>{d.quality_grade || "All Grades"}</td>
+                      <td style={{ color: "var(--primary-700)", fontWeight: 700 }}>
+                        {d.max_price_per_kg ? formatCurrency(d.max_price_per_kg) : "Negotiable"}
+                      </td>
+                      <td style={{ fontSize: "0.82rem", color: "var(--slate-600)" }}>
+                        {d.required_from} to {d.required_until}
+                      </td>
+                      <td>
+                        <span className="badge-neutral">{d.status}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

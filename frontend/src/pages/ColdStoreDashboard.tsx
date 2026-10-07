@@ -14,16 +14,20 @@ export const ColdStoreDashboard: React.FC = () => {
       try {
         setLoading(true);
         setError(null);
-        const [dashResult, storesResult] = await Promise.all([
-          fetchColdStoreDashboard(1, "Purba Bardhaman", 7),
-          fetchOperatorStores(),
-        ]);
+        const dashResult = await fetchColdStoreDashboard(1, "Purba Bardhaman", 7);
         setData(dashResult);
-        setStores(storesResult);
       } catch (err: any) {
         setError(err?.message || "Failed to load cold storage intelligence");
       } finally {
         setLoading(false);
+      }
+
+      // Secondary request: load facilities list defensively
+      try {
+        const storesResult = await fetchOperatorStores();
+        setStores(storesResult || []);
+      } catch (err) {
+        console.warn("Non-fatal: could not load operator stores list:", err);
       }
     }
     loadData();
@@ -233,7 +237,7 @@ export const ColdStoreDashboard: React.FC = () => {
           Warehouse & Release Risk Analysis
         </h2>
         <div className="risks-grid">
-          {risks.map((r, idx) => (
+          {(risks || []).map((r, idx) => (
             <div key={idx} className="risk-item-card">
               <div className="risk-item-header">
                 <span className="risk-item-name">{formatActionTitle(r.risk_type)}</span>

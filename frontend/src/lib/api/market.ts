@@ -43,7 +43,7 @@ export interface BuyerDemandItem {
   id: number;
   buyer_id: number;
   buyer_name: string;
-  buyer_district: string;
+  buyer_district?: string | null;
   commodity_id: number;
   commodity_name: string;
   quantity_kg: number;

@@ -70,7 +70,7 @@ export async function fetchFarmerDashboard(
   const query = new URLSearchParams({
     commodity_id: String(commodityId),
     district,
-    days_ahead: String(daysAhead),
+    window_days: String(daysAhead),
   });
   return apiClient<FarmerDashboardData>(`/intelligence/farmer/dashboard?${query.toString()}`);
 }
@@ -83,7 +83,7 @@ export async function fetchColdStoreDashboard(
   const query = new URLSearchParams({
     commodity_id: String(commodityId),
     district,
-    days_ahead: String(daysAhead),
+    window_days: String(daysAhead),
   });
   return apiClient<ColdStoreDashboardData>(`/intelligence/cold-store/dashboard?${query.toString()}`);
 }
@@ -96,7 +96,7 @@ export async function fetchPriceForecast(
   const query = new URLSearchParams({
     commodity_id: String(commodityId),
     district,
-    days_ahead: String(daysAhead),
+    window_days: String(daysAhead),
   });
   return apiClient<PriceForecastData>(`/intelligence/forecast/price?${query.toString()}`);
 }

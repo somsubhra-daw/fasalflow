@@ -95,6 +95,7 @@ class BuyerDemandResponse(BaseModel):
     buyer_id: int
     buyer_name: Optional[str] = None
     buyer_type: Optional[BuyerType] = None
+    buyer_district: Optional[str] = None
     commodity_id: int
     commodity_name: Optional[str] = None
     commodity_code: Optional[str] = None
