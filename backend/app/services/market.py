@@ -182,13 +182,13 @@ def create_buyer_demand(db: Session, data: BuyerDemandCreate) -> BuyerDemandResp
 
     if data.required_until < data.required_from:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="required_until cannot be earlier than required_from",
         )
 
     if data.quantity_kg <= 0:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Demand quantity must be greater than 0",
         )
 

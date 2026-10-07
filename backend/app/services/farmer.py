@@ -24,11 +24,11 @@ def get_farmer_profile(db: Session, current_user: User) -> FarmerProfileResponse
 
     total_farms = db.query(func.count(Farm.id)).filter(Farm.farmer_id == farmer.id).scalar() or 0
 
-    # Aggregate active supplies (PLANNED or READY)
+    # Aggregate active supplies (PLANNED, READY, or PARTIALLY_SOLD)
     active_qty = (
-        db.query(func.coalesce(func.sum(FarmerSupply.quantity_kg), Decimal(0)))
+        db.query(func.coalesce(func.sum(FarmerSupply.remaining_quantity_kg), Decimal(0)))
         .join(Farm, FarmerSupply.farm_id == Farm.id)
-        .filter(Farm.farmer_id == farmer.id, FarmerSupply.status.in_([SupplyStatus.PLANNED, SupplyStatus.READY]))
+        .filter(Farm.farmer_id == farmer.id, FarmerSupply.status.in_([SupplyStatus.PLANNED, SupplyStatus.READY, SupplyStatus.PARTIALLY_SOLD]))
         .scalar()
     )
 
@@ -103,7 +103,6 @@ def list_farmer_supplies(
         query = query.filter(FarmerSupply.status == status_filter)
 
     supplies = query.order_by(FarmerSupply.expected_harvest_date.asc()).offset(offset).limit(limit).all()
-
     return [
         FarmerSupplyResponse(
             id=s.id,
@@ -112,7 +111,10 @@ def list_farmer_supplies(
             commodity_id=s.commodity_id,
             commodity_name=s.commodity.name if s.commodity else None,
             commodity_code=s.commodity.code if s.commodity else None,
-            quantity_kg=s.quantity_kg,
+            declared_quantity_kg=s.declared_quantity_kg,
+            remaining_quantity_kg=s.remaining_quantity_kg,
+            quantity_kg=s.remaining_quantity_kg,
+            sold_quantity_kg=s.declared_quantity_kg - s.remaining_quantity_kg,
             expected_harvest_date=s.expected_harvest_date,
             quality_grade=s.quality_grade,
             status=s.status,
@@ -145,7 +147,8 @@ def create_farmer_supply(db: Session, current_user: User, data: FarmerSupplyCrea
     supply = FarmerSupply(
         farm_id=farm.id,
         commodity_id=commodity.id,
-        quantity_kg=data.quantity_kg,
+        declared_quantity_kg=data.quantity_kg,
+        remaining_quantity_kg=data.quantity_kg,
         expected_harvest_date=data.expected_harvest_date,
         quality_grade=data.quality_grade.strip(),
         status=data.status,
@@ -161,7 +164,10 @@ def create_farmer_supply(db: Session, current_user: User, data: FarmerSupplyCrea
         commodity_id=supply.commodity_id,
         commodity_name=commodity.name,
         commodity_code=commodity.code,
-        quantity_kg=supply.quantity_kg,
+        declared_quantity_kg=supply.declared_quantity_kg,
+        remaining_quantity_kg=supply.remaining_quantity_kg,
+        quantity_kg=supply.remaining_quantity_kg,
+        sold_quantity_kg=Decimal(0),
         expected_harvest_date=supply.expected_harvest_date,
         quality_grade=supply.quality_grade,
         status=supply.status,
@@ -195,14 +201,40 @@ def update_farmer_supply(
             detail="Supply declaration not found or does not belong to your farms",
         )
 
-    if data.quantity_kg is not None:
-        supply.quantity_kg = data.quantity_kg
+    # Validate declared and remaining volume boundaries
+    target_declared = data.quantity_kg if data.quantity_kg is not None else supply.declared_quantity_kg
+    target_remaining = data.remaining_quantity_kg if data.remaining_quantity_kg is not None else supply.remaining_quantity_kg
+
+    if target_remaining > target_declared:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Remaining quantity ({target_remaining} kg) cannot exceed declared quantity ({target_declared} kg)",
+        )
+    if target_remaining < Decimal(0):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Remaining quantity cannot be negative",
+        )
+
+    supply.declared_quantity_kg = target_declared
+    supply.remaining_quantity_kg = target_remaining
+
     if data.expected_harvest_date is not None:
         supply.expected_harvest_date = data.expected_harvest_date
     if data.quality_grade is not None:
         supply.quality_grade = data.quality_grade.strip()
+
     if data.status is not None:
         supply.status = data.status
+        if supply.status == SupplyStatus.SOLD:
+            supply.remaining_quantity_kg = Decimal(0)
+    else:
+        # Automatic state transitions based on remaining quantity
+        if supply.remaining_quantity_kg == Decimal(0):
+            supply.status = SupplyStatus.SOLD
+        elif Decimal(0) < supply.remaining_quantity_kg < supply.declared_quantity_kg:
+            if supply.status in (SupplyStatus.PLANNED, SupplyStatus.READY):
+                supply.status = SupplyStatus.PARTIALLY_SOLD
 
     db.commit()
     db.refresh(supply)
@@ -214,7 +246,10 @@ def update_farmer_supply(
         commodity_id=supply.commodity_id,
         commodity_name=supply.commodity.name,
         commodity_code=supply.commodity.code,
-        quantity_kg=supply.quantity_kg,
+        declared_quantity_kg=supply.declared_quantity_kg,
+        remaining_quantity_kg=supply.remaining_quantity_kg,
+        quantity_kg=supply.remaining_quantity_kg,
+        sold_quantity_kg=supply.declared_quantity_kg - supply.remaining_quantity_kg,
         expected_harvest_date=supply.expected_harvest_date,
         quality_grade=supply.quality_grade,
         status=supply.status,

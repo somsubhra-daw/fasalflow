@@ -21,7 +21,7 @@ def register_user(db: Session, req: UserRegisterRequest) -> Token:
     # Validate cold store operator requirements
     if req.role == UserRole.COLD_STORE_OPERATOR and not req.organization_name:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Organization name is required for Cold Store Operators",
         )
 

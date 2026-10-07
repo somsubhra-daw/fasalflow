@@ -155,5 +155,41 @@ def test_role_guard_farmer_cannot_access_operator_endpoint(client):
     # We will verify role rejection against an endpoint guarded by require_cold_store_operator
     # We can test with a temporary test route or our guard function directly
     from jose import jwt
-    payload = jwt.decode(token, "fasalflow_super_secret_jwt_key_for_dev_change_in_production", algorithms=["HS256"])
+    from app.core.config import settings
+    payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
     assert payload["role"] == "FARMER"
+
+
+def test_jwt_configuration_environment_validation():
+    from app.core.config import Settings
+    from pydantic import ValidationError
+    from datetime import timedelta
+    from app.core.security import create_access_token, decode_access_token
+    from jose import jwt
+
+    # 1. Development allows fallback
+    dev_settings = Settings(ENVIRONMENT="development")
+    assert dev_settings.JWT_SECRET is not None
+
+    # 2. Production with default secret must fail
+    with pytest.raises(ValidationError):
+        Settings(ENVIRONMENT="production")
+
+    # 3. Production with weak secret (< 32 chars) must fail
+    with pytest.raises(ValidationError):
+        Settings(ENVIRONMENT="production", JWT_SECRET="short_secret")
+
+    # 4. Production with strong secret succeeds
+    strong_secret = "a_very_strong_random_production_secret_key_1234567890"
+    prod_settings = Settings(ENVIRONMENT="production", JWT_SECRET=strong_secret)
+    assert prod_settings.JWT_SECRET == strong_secret
+
+    # 5. Token creation and expiration test
+    expired_token = create_access_token(
+        subject="1",
+        role="FARMER",
+        expires_delta=timedelta(seconds=-10),  # expired 10 seconds ago
+    )
+    with pytest.raises(jwt.JWTError):
+        decode_access_token(expired_token)
+

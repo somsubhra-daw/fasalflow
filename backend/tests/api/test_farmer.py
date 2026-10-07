@@ -188,3 +188,83 @@ def test_supply_input_validation(client_with_db):
         "expected_harvest_date": "2026-11-20",
     })
     assert neg_res.status_code == 422
+
+
+def test_farmer_partially_sold_quantity_lifecycle(client_with_db):
+    """Verify declared vs remaining quantity lifecycle:
+    1. Declared harvest initialized.
+    2. Partial sell updates remaining quantity and auto-transitions to PARTIALLY_SOLD.
+    3. Over-allocation (remaining > declared) is strictly rejected with 400.
+    4. Remaining reduced to 0 transitions to SOLD and removes volume from active supply.
+    """
+    reg = client_with_db.post("/api/v1/auth/register", json={
+        "name": "Supply Farmer",
+        "identifier": "supply_flow@test.com",
+        "password": "password123",
+        "role": "FARMER",
+        "district": "Hooghly",
+    })
+    headers = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+
+    farm = client_with_db.post("/api/v1/farmer/farms", headers=headers, json={
+        "name": "Hooghly Farm",
+        "district": "Hooghly",
+    }).json()
+
+    # 1. Create supply: 10,000 kg declared
+    create_res = client_with_db.post("/api/v1/farmer/supply", headers=headers, json={
+        "farm_id": farm["id"],
+        "commodity_id": 1,
+        "quantity_kg": 10000.0,
+        "expected_harvest_date": "2026-11-15",
+        "quality_grade": "A",
+        "status": "PLANNED",
+    })
+    assert create_res.status_code == 201
+    supply = create_res.json()
+    supply_id = supply["id"]
+    assert Decimal(str(supply["declared_quantity_kg"])) == Decimal("10000.00")
+    assert Decimal(str(supply["remaining_quantity_kg"])) == Decimal("10000.00")
+    assert Decimal(str(supply["sold_quantity_kg"])) == Decimal("0")
+    assert supply["status"] == "PLANNED"
+
+    # Profile shows 10,000 kg active
+    prof = client_with_db.get("/api/v1/farmer/profile", headers=headers).json()
+    assert Decimal(str(prof["total_active_supplies_kg"])) == Decimal("10000.00")
+
+    # 2. Reject remaining_quantity_kg > declared_quantity_kg (15,000 > 10,000)
+    over_res = client_with_db.patch(f"/api/v1/farmer/supply/{supply_id}", headers=headers, json={
+        "remaining_quantity_kg": 15000.0,
+    })
+    assert over_res.status_code == 400
+    assert "cannot exceed declared quantity" in over_res.json()["detail"]
+
+    # 3. Partially sold: 4,000 kg remaining (6,000 sold)
+    part_res = client_with_db.patch(f"/api/v1/farmer/supply/{supply_id}", headers=headers, json={
+        "remaining_quantity_kg": 4000.0,
+    })
+    assert part_res.status_code == 200
+    part_data = part_res.json()
+    assert Decimal(str(part_data["declared_quantity_kg"])) == Decimal("10000.00")
+    assert Decimal(str(part_data["remaining_quantity_kg"])) == Decimal("4000.00")
+    assert Decimal(str(part_data["sold_quantity_kg"])) == Decimal("6000.00")
+    assert part_data["status"] == "PARTIALLY_SOLD"
+
+    # Profile shows active volume is now 4,000 kg, NOT 10,000 kg
+    prof_part = client_with_db.get("/api/v1/farmer/profile", headers=headers).json()
+    assert Decimal(str(prof_part["total_active_supplies_kg"])) == Decimal("4000.00")
+
+    # 4. Completely sold: remaining 0 kg
+    sold_res = client_with_db.patch(f"/api/v1/farmer/supply/{supply_id}", headers=headers, json={
+        "remaining_quantity_kg": 0.0,
+    })
+    assert sold_res.status_code == 200
+    sold_data = sold_res.json()
+    assert Decimal(str(sold_data["remaining_quantity_kg"])) == Decimal("0")
+    assert Decimal(str(sold_data["sold_quantity_kg"])) == Decimal("10000.00")
+    assert sold_data["status"] == "SOLD"
+
+    # Profile shows active volume is now 0 kg
+    prof_sold = client_with_db.get("/api/v1/farmer/profile", headers=headers).json()
+    assert Decimal(str(prof_sold["total_active_supplies_kg"])) == Decimal("0")
+

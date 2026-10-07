@@ -66,20 +66,26 @@ def get_operator_profile(db: Session, current_user: User) -> ColdStoreOperatorPr
 
 
 def list_operator_stores(db: Session, current_user: User) -> List[ColdStoreResponse]:
-    """List all cold storage facilities managed strictly by the current operator with occupancy metrics."""
+    """List all cold storage facilities managed strictly by the current operator with occupancy metrics in a single aggregated query."""
     operator = db.query(ColdStoreOperator).filter(ColdStoreOperator.user_id == current_user.id).first()
     if not operator:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator profile not found")
 
-    stores = db.query(ColdStore).filter(ColdStore.operator_id == operator.id).all()
-    result = []
-    for s in stores:
-        occupancy = (
-            db.query(func.coalesce(func.sum(ColdStoreInventory.current_quantity_kg), Decimal(0)))
-            .filter(ColdStoreInventory.cold_store_id == s.id)
-            .scalar()
-            or Decimal(0)
+    # Single query outer-joining ColdStore with ColdStoreInventory to eliminate N+1 queries
+    store_rows = (
+        db.query(
+            ColdStore,
+            func.coalesce(func.sum(ColdStoreInventory.current_quantity_kg), Decimal(0)).label("occupancy"),
         )
+        .outerjoin(ColdStoreInventory, ColdStore.id == ColdStoreInventory.cold_store_id)
+        .filter(ColdStore.operator_id == operator.id)
+        .group_by(ColdStore.id)
+        .order_by(ColdStore.created_at.desc())
+        .all()
+    )
+
+    result = []
+    for s, occupancy in store_rows:
         util_pct = Decimal(0)
         if s.capacity_kg > 0:
             util_pct = round((Decimal(occupancy) / Decimal(s.capacity_kg)) * 100, 2)
@@ -112,7 +118,7 @@ def create_cold_store(db: Session, current_user: User, data: ColdStoreCreate) ->
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator profile not found")
 
     if data.capacity_kg <= 0:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Capacity must be strictly positive")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Capacity must be strictly positive")
 
     store = ColdStore(
         operator_id=operator.id,
@@ -235,6 +241,7 @@ def list_cold_store_events(
 
     events = (
         db.query(ColdStoreEvent)
+        .options(joinedload(ColdStoreEvent.commodity))
         .filter(ColdStoreEvent.cold_store_id == store.id)
         .order_by(ColdStoreEvent.event_date.desc(), ColdStoreEvent.created_at.desc())
         .offset(offset)
@@ -242,16 +249,13 @@ def list_cold_store_events(
         .all()
     )
 
-    # Preload commodity names
-    commodity_map = {c.id: c for c in db.query(Commodity).all()}
-
     return [
         ColdStoreEventResponse(
             id=e.id,
             cold_store_id=e.cold_store_id,
             commodity_id=e.commodity_id,
-            commodity_name=commodity_map.get(e.commodity_id).name if e.commodity_id in commodity_map else None,
-            commodity_code=commodity_map.get(e.commodity_id).code if e.commodity_id in commodity_map else None,
+            commodity_name=e.commodity.name if e.commodity else None,
+            commodity_code=e.commodity.code if e.commodity else None,
             event_type=e.event_type,
             quantity_kg=e.quantity_kg,
             event_date=e.event_date,
@@ -276,8 +280,14 @@ def record_cold_store_event(
     if not operator:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operator profile not found")
 
-    # Verify store ownership
-    store = db.query(ColdStore).filter(ColdStore.id == store_id, ColdStore.operator_id == operator.id).first()
+    # Lock the parent cold-store row with FOR UPDATE because total facility capacity
+    # is shared across all commodities stored in this physical facility.
+    store = (
+        db.query(ColdStore)
+        .filter(ColdStore.id == store_id, ColdStore.operator_id == operator.id)
+        .with_for_update()
+        .first()
+    )
     if not store:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cold store not found or access forbidden")
 
@@ -287,10 +297,9 @@ def record_cold_store_event(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Commodity not found")
 
     if data.quantity_kg <= 0:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Quantity must be strictly greater than 0")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Quantity must be strictly greater than 0")
 
-    # Check / lock inventory balance for this store and commodity
-    # In SQLite, table/db locks apply; in Postgres, row lock on ColdStoreInventory ensures concurrency safety
+    # Lock/check specific inventory balance for this commodity
     inventory = (
         db.query(ColdStoreInventory)
         .filter(

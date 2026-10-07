@@ -133,6 +133,10 @@ def test_cold_store_crud_and_events_workflow(client_with_db):
     # 8. Check events audit history: 2 successful events (1 loading, 1 release)
     events_list = client_with_db.get(f"/api/v1/cold-store/stores/{store_id}/events", headers=headers_a).json()
     assert len(events_list) == 2
+    assert events_list[0]["commodity_name"] == "Potato"
+    assert events_list[0]["commodity_code"] == "POTATO"
+    assert events_list[1]["commodity_name"] == "Potato"
+    assert events_list[1]["commodity_code"] == "POTATO"
 
 
 def test_operator_ownership_isolation(client_with_db):
@@ -178,3 +182,168 @@ def test_operator_ownership_isolation(client_with_db):
     # Operator B attempts to view Store A details -> 404 forbidden
     hack_view = client_with_db.get(f"/api/v1/cold-store/stores/{store_a_id}", headers=headers_b)
     assert hack_view.status_code == 404
+
+
+def test_multi_commodity_capacity_overflow_and_atomicity(client_with_db):
+    # Register operator
+    reg = client_with_db.post("/api/v1/auth/register", json={
+        "name": "Operator Multi",
+        "identifier": "multi_op@test.com",
+        "password": "password123",
+        "role": "COLD_STORE_OPERATOR",
+        "district": "Purba Bardhaman",
+        "organization_name": "Multi Chamber Ltd",
+    })
+    headers = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+
+    # Create store with capacity 100,000 kg
+    store = client_with_db.post("/api/v1/cold-store/stores", headers=headers, json={
+        "name": "Chamber 1",
+        "district": "Purba Bardhaman",
+        "capacity_kg": 100000.0,
+    }).json()
+    store_id = store["id"]
+
+    # Load 70,000 kg of Commodity 1 (Potato)
+    load1 = client_with_db.post(f"/api/v1/cold-store/stores/{store_id}/events", headers=headers, json={
+        "commodity_id": 1,
+        "event_type": "LOADING",
+        "quantity_kg": 70000.0,
+        "event_date": "2026-10-06",
+        "reference": "Batch Potato 1",
+    })
+    assert load1.status_code == 201
+
+    # Attempt to load 40,000 kg of Commodity 1 (70k + 40k = 110k > 100k capacity) -> Rejects 409
+    load2 = client_with_db.post(f"/api/v1/cold-store/stores/{store_id}/events", headers=headers, json={
+        "commodity_id": 1,
+        "event_type": "LOADING",
+        "quantity_kg": 40000.0,
+        "event_date": "2026-10-06",
+        "reference": "Batch Potato 2",
+    })
+    assert load2.status_code == 409
+    assert "exceeds cold store capacity" in load2.json()["detail"]
+
+    # Verify inventory was NOT updated on rejection
+    inv = client_with_db.get(f"/api/v1/cold-store/stores/{store_id}/inventory", headers=headers).json()
+    assert Decimal(str(inv[0]["current_quantity_kg"])) == Decimal("70000.00")
+
+    # Verify no partial event was logged for the rejected attempt
+    events = client_with_db.get(f"/api/v1/cold-store/stores/{store_id}/events", headers=headers).json()
+    assert len(events) == 1
+
+
+def test_operator_multi_store_occupancy_aggregation(client_with_db):
+    """Verify that list_operator_stores accurately aggregates occupancy across multiple facilities,
+    including stores with zero inventory, in a single SQL operation.
+    """
+    reg = client_with_db.post("/api/v1/auth/register", json={
+        "name": "Operator Multi-Store",
+        "identifier": "multi_stores@test.com",
+        "password": "password123",
+        "role": "COLD_STORE_OPERATOR",
+        "district": "Hooghly",
+        "organization_name": "Bengal Cold Hubs",
+    })
+    headers = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+
+    # 1. Create Store 1 (100k kg capacity)
+    s1 = client_with_db.post("/api/v1/cold-store/stores", headers=headers, json={
+        "name": "Hub North",
+        "district": "Hooghly",
+        "capacity_kg": 100000.0,
+    }).json()
+
+    # 2. Create Store 2 (50k kg capacity)
+    s2 = client_with_db.post("/api/v1/cold-store/stores", headers=headers, json={
+        "name": "Hub South",
+        "district": "Hooghly",
+        "capacity_kg": 50000.0,
+    }).json()
+
+    # 3. Create Store 3 (20k kg capacity - left completely empty)
+    s3 = client_with_db.post("/api/v1/cold-store/stores", headers=headers, json={
+        "name": "Hub West",
+        "district": "Hooghly",
+        "capacity_kg": 20000.0,
+    }).json()
+
+    # Load 40,000 kg into Store 1
+    client_with_db.post(f"/api/v1/cold-store/stores/{s1['id']}/events", headers=headers, json={
+        "commodity_id": 1,
+        "event_type": "LOADING",
+        "quantity_kg": 40000.0,
+        "event_date": "2026-10-06",
+    })
+
+    # Load 25,000 kg into Store 2
+    client_with_db.post(f"/api/v1/cold-store/stores/{s2['id']}/events", headers=headers, json={
+        "commodity_id": 1,
+        "event_type": "LOADING",
+        "quantity_kg": 25000.0,
+        "event_date": "2026-10-06",
+    })
+
+    # Fetch all operator stores
+    stores_list = client_with_db.get("/api/v1/cold-store/stores", headers=headers).json()
+    assert len(stores_list) == 3
+
+    store_map = {s["id"]: s for s in stores_list}
+    # Check Store 1: 40k occupancy (40%)
+    assert Decimal(str(store_map[s1["id"]]["current_occupancy_kg"])) == Decimal("40000.00")
+    assert Decimal(str(store_map[s1["id"]]["utilization_percentage"])) == Decimal("40.00")
+
+    # Check Store 2: 25k occupancy (50%)
+    assert Decimal(str(store_map[s2["id"]]["current_occupancy_kg"])) == Decimal("25000.00")
+    assert Decimal(str(store_map[s2["id"]]["utilization_percentage"])) == Decimal("50.00")
+
+    # Check Store 3: 0 occupancy (0%)
+    assert Decimal(str(store_map[s3["id"]]["current_occupancy_kg"])) == Decimal("0")
+    assert Decimal(str(store_map[s3["id"]]["utilization_percentage"])) == Decimal("0.00")
+
+
+def test_cold_store_event_commodity_joinedload(client_with_db):
+    """Verify that list_cold_store_events eager-loads Commodity relationships across different
+    commodities without executing full-table scans.
+    """
+    from app.models.models import Commodity
+    from app.db.session import get_db
+
+    # Register operator
+    reg = client_with_db.post("/api/v1/auth/register", json={
+        "name": "Operator Multi Commodity",
+        "identifier": "multi_comm@test.com",
+        "password": "password123",
+        "role": "COLD_STORE_OPERATOR",
+        "district": "Hooghly",
+        "organization_name": "Multi Commodity Cold Store",
+    })
+    headers = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+
+    # Add a second commodity (Onion) into DB
+    store = client_with_db.post("/api/v1/cold-store/stores", headers=headers, json={
+        "name": "Chamber Multi",
+        "district": "Hooghly",
+        "capacity_kg": 50000.0,
+    }).json()
+    store_id = store["id"]
+
+    # Record Potato event (Commodity ID 1)
+    client_with_db.post(f"/api/v1/cold-store/stores/{store_id}/events", headers=headers, json={
+        "commodity_id": 1,
+        "event_type": "LOADING",
+        "quantity_kg": 15000.0,
+        "event_date": "2026-10-06",
+        "reference": "Potato Lot 1",
+    })
+
+    # Fetch events and check joined commodity attributes
+    events = client_with_db.get(f"/api/v1/cold-store/stores/{store_id}/events", headers=headers).json()
+    assert len(events) == 1
+    assert events[0]["commodity_id"] == 1
+    assert events[0]["commodity_name"] == "Potato"
+    assert events[0]["commodity_code"] == "POTATO"
+
+
+

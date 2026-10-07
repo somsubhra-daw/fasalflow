@@ -46,25 +46,57 @@ def farmer_dashboard(
     farmer = db.query(Farmer).filter(Farmer.user_id == current_user.id).first()
     district = farmer.district if farmer else "Purba Bardhaman"
 
+    # Aggregate this specific farmer's active produce in this commodity
+    farmer_active_qty = Decimal(0)
+    if farmer:
+        from app.models.models import Farm, FarmerSupply
+        from app.models.enums import SupplyStatus
+        qty_val = (
+            db.query(func.coalesce(func.sum(FarmerSupply.remaining_quantity_kg), Decimal(0)))
+            .join(Farm, FarmerSupply.farm_id == Farm.id)
+            .filter(
+                Farm.farmer_id == farmer.id,
+                FarmerSupply.commodity_id == commodity_id,
+                FarmerSupply.status.in_([SupplyStatus.PLANNED, SupplyStatus.READY, SupplyStatus.PARTIALLY_SOLD]),
+            )
+            .scalar()
+        )
+        farmer_active_qty = Decimal(qty_val or Decimal(0))
+
     metrics = calculate_shared_supply_demand(
         db=db,
         commodity_id=commodity_id,
         district=district,
         window_days=window_days,
     )
-    risks = evaluate_farmer_risks(metrics)
-    recs = generate_farmer_recommendations(metrics, risks)
+
+    # Calculate farmer exposure metrics
+    farmer_share_pct = Decimal(0)
+    if metrics.effective_supply_kg > 0:
+        farmer_share_pct = round((farmer_active_qty / metrics.effective_supply_kg) * 100, 2)
+
+    farmer_exposure_level = "LOW"
+    if farmer_active_qty >= Decimal(25000):
+        farmer_exposure_level = "HIGH"
+    elif farmer_active_qty >= Decimal(10000):
+        farmer_exposure_level = "MEDIUM"
+
+    risks = evaluate_farmer_risks(metrics, farmer_quantity_kg=farmer_active_qty)
+    recs = generate_farmer_recommendations(metrics, risks, farmer_quantity_kg=farmer_active_qty)
 
     return FarmerIntelligenceDashboard(
         commodity_name=metrics.commodity_name,
         district=district,
         window_days=window_days,
-        current_modal_price=metrics.current_modal_price or Decimal("20.00"),
-        price_trend=metrics.price_trend or "STABLE",
+        current_modal_price=metrics.current_modal_price,
+        price_trend=metrics.price_trend,
         expected_local_supply_kg=metrics.expected_fresh_supply_kg,
         visible_demand_kg=metrics.forecast_demand_kg,
         supply_gap_kg=metrics.supply_gap_kg,
         market_status=metrics.status,
+        farmer_active_supply_kg=farmer_active_qty,
+        farmer_supply_share_pct=farmer_share_pct,
+        farmer_exposure_level=farmer_exposure_level,
         risks=risks,
         recommendations=recs,
     )
@@ -81,10 +113,26 @@ def farmer_risks(
     farmer = db.query(Farmer).filter(Farmer.user_id == current_user.id).first()
     district = farmer.district if farmer else "Purba Bardhaman"
 
+    farmer_active_qty = Decimal(0)
+    if farmer:
+        from app.models.models import Farm, FarmerSupply
+        from app.models.enums import SupplyStatus
+        qty_val = (
+            db.query(func.coalesce(func.sum(FarmerSupply.remaining_quantity_kg), Decimal(0)))
+            .join(Farm, FarmerSupply.farm_id == Farm.id)
+            .filter(
+                Farm.farmer_id == farmer.id,
+                FarmerSupply.commodity_id == commodity_id,
+                FarmerSupply.status.in_([SupplyStatus.PLANNED, SupplyStatus.READY, SupplyStatus.PARTIALLY_SOLD]),
+            )
+            .scalar()
+        )
+        farmer_active_qty = Decimal(qty_val or Decimal(0))
+
     metrics = calculate_shared_supply_demand(
         db=db, commodity_id=commodity_id, district=district, window_days=window_days
     )
-    return evaluate_farmer_risks(metrics)
+    return evaluate_farmer_risks(metrics, farmer_quantity_kg=farmer_active_qty)
 
 
 @router.get("/farmer/recommendations", response_model=List[ActionRecommendation])
@@ -98,11 +146,27 @@ def farmer_recommendations(
     farmer = db.query(Farmer).filter(Farmer.user_id == current_user.id).first()
     district = farmer.district if farmer else "Purba Bardhaman"
 
+    farmer_active_qty = Decimal(0)
+    if farmer:
+        from app.models.models import Farm, FarmerSupply
+        from app.models.enums import SupplyStatus
+        qty_val = (
+            db.query(func.coalesce(func.sum(FarmerSupply.remaining_quantity_kg), Decimal(0)))
+            .join(Farm, FarmerSupply.farm_id == Farm.id)
+            .filter(
+                Farm.farmer_id == farmer.id,
+                FarmerSupply.commodity_id == commodity_id,
+                FarmerSupply.status.in_([SupplyStatus.PLANNED, SupplyStatus.READY, SupplyStatus.PARTIALLY_SOLD]),
+            )
+            .scalar()
+        )
+        farmer_active_qty = Decimal(qty_val or Decimal(0))
+
     metrics = calculate_shared_supply_demand(
         db=db, commodity_id=commodity_id, district=district, window_days=window_days
     )
-    risks = evaluate_farmer_risks(metrics)
-    return generate_farmer_recommendations(metrics, risks)
+    risks = evaluate_farmer_risks(metrics, farmer_quantity_kg=farmer_active_qty)
+    return generate_farmer_recommendations(metrics, risks, farmer_quantity_kg=farmer_active_qty)
 
 
 # =====================================================================

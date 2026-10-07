@@ -27,6 +27,7 @@ Thumbs.db
 
 # Local databases / volumes
 *.sqlite3
+*.db
 postgres_data/
 
 # Logs

@@ -35,7 +35,7 @@ from app.models.enums import (
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(150), nullable=False)
     # email or phone used as unique login identifier
     identifier = Column(String(150), unique=True, nullable=False, index=True)
@@ -55,7 +55,7 @@ class User(Base):
 class Commodity(Base):
     __tablename__ = "commodities"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
     code = Column(String(50), unique=True, nullable=False, index=True)
     default_unit = Column(String(20), default="kg", nullable=False)
@@ -74,7 +74,7 @@ class Commodity(Base):
 class Farmer(Base):
     __tablename__ = "farmers"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     district = Column(String(100), nullable=False, index=True)
     block = Column(String(100), nullable=True)
@@ -90,7 +90,7 @@ class Farmer(Base):
 class Farm(Base):
     __tablename__ = "farms"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     farmer_id = Column(Integer, ForeignKey("farmers.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(150), nullable=False)
     district = Column(String(100), nullable=False)
@@ -113,10 +113,15 @@ class Farm(Base):
 class FarmerSupply(Base):
     __tablename__ = "farmer_supply"
 
-    id = Column(Integer, primary_key=True, index=True)
-    farm_id = Column(Integer, ForeignKey("farms.id", ondelete="CASCADE"), nullable=False, index=True)
-    commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False, index=True)
-    quantity_kg = Column(Numeric(12, 2), nullable=False)
+    id = Column(Integer, primary_key=True)
+    farm_id = Column(Integer, ForeignKey("farms.id", ondelete="CASCADE"), nullable=False)
+    commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False)
+    
+    # Original declared harvest volume
+    declared_quantity_kg = Column(Numeric(12, 2), nullable=False)
+    # Remaining available produce (reduces when partially or fully sold/stored)
+    remaining_quantity_kg = Column(Numeric(12, 2), nullable=False)
+
     expected_harvest_date = Column(Date, nullable=False, index=True)
     quality_grade = Column(String(20), default="A", nullable=False)
     status = Column(SAEnum(SupplyStatus, name="supply_status_enum", native_enum=False), default=SupplyStatus.PLANNED, nullable=False)
@@ -126,8 +131,20 @@ class FarmerSupply(Base):
     farm = relationship("Farm", back_populates="supplies")
     commodity = relationship("Commodity", back_populates="supplies")
 
+    # Backward-compatible property for existing code referencing quantity_kg
+    @property
+    def quantity_kg(self) -> Decimal:
+        return self.remaining_quantity_kg
+
+    @quantity_kg.setter
+    def quantity_kg(self, value: Decimal) -> None:
+        self.declared_quantity_kg = value
+        self.remaining_quantity_kg = value
+
     __table_args__ = (
-        CheckConstraint("quantity_kg > 0", name="chk_farmer_supply_quantity_positive"),
+        CheckConstraint("declared_quantity_kg > 0", name="chk_farmer_supply_declared_qty_positive"),
+        CheckConstraint("remaining_quantity_kg >= 0", name="chk_farmer_supply_remaining_qty_non_negative"),
+        CheckConstraint("remaining_quantity_kg <= declared_quantity_kg", name="chk_farmer_supply_remaining_lte_declared"),
         Index("idx_farmer_supply_farm_commodity", "farm_id", "commodity_id"),
         Index("idx_farmer_supply_harvest_commodity", "commodity_id", "expected_harvest_date"),
     )
@@ -139,7 +156,7 @@ class FarmerSupply(Base):
 class ColdStoreOperator(Base):
     __tablename__ = "cold_store_operators"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     organization_name = Column(String(200), nullable=False)
     district = Column(String(100), nullable=False)
@@ -155,7 +172,7 @@ class ColdStoreOperator(Base):
 class ColdStore(Base):
     __tablename__ = "cold_stores"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     operator_id = Column(Integer, ForeignKey("cold_store_operators.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(200), nullable=False)
     district = Column(String(100), nullable=False, index=True)
@@ -182,7 +199,7 @@ class ColdStore(Base):
 class ColdStoreInventory(Base):
     __tablename__ = "cold_store_inventory"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     cold_store_id = Column(Integer, ForeignKey("cold_stores.id", ondelete="CASCADE"), nullable=False, index=True)
     commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False, index=True)
     current_quantity_kg = Column(Numeric(14, 2), default=0, nullable=False)
@@ -201,8 +218,8 @@ class ColdStoreInventory(Base):
 class ColdStoreEvent(Base):
     __tablename__ = "cold_store_events"
 
-    id = Column(Integer, primary_key=True, index=True)
-    cold_store_id = Column(Integer, ForeignKey("cold_stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(Integer, primary_key=True)
+    cold_store_id = Column(Integer, ForeignKey("cold_stores.id", ondelete="CASCADE"), nullable=False)
     commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False, index=True)
     event_type = Column(SAEnum(ColdStoreEventType, name="cold_store_event_type_enum", native_enum=False), nullable=False)
     quantity_kg = Column(Numeric(12, 2), nullable=False)
@@ -211,6 +228,7 @@ class ColdStoreEvent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     cold_store = relationship("ColdStore", back_populates="events")
+    commodity = relationship("Commodity")
 
     __table_args__ = (
         CheckConstraint("quantity_kg > 0", name="chk_cold_store_event_quantity_positive"),
@@ -224,7 +242,7 @@ class ColdStoreEvent(Base):
 class Buyer(Base):
     __tablename__ = "buyers"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(150), nullable=False)
     buyer_type = Column(SAEnum(BuyerType, name="buyer_type_enum", native_enum=False), default=BuyerType.WHOLESALER, nullable=False)
     district = Column(String(100), nullable=False, index=True)
@@ -241,9 +259,9 @@ class Buyer(Base):
 class BuyerDemand(Base):
     __tablename__ = "buyer_demand"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     buyer_id = Column(Integer, ForeignKey("buyers.id", ondelete="CASCADE"), nullable=False, index=True)
-    commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False, index=True)
+    commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False)
     quantity_kg = Column(Numeric(12, 2), nullable=False)
     required_from = Column(Date, nullable=False, index=True)
     required_until = Column(Date, nullable=False, index=True)
@@ -270,7 +288,7 @@ class BuyerDemand(Base):
 class Market(Base):
     __tablename__ = "markets"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(150), nullable=False)
     district = Column(String(100), nullable=False, index=True)
     block = Column(String(100), nullable=True)
@@ -287,9 +305,9 @@ class Market(Base):
 class MarketPrice(Base):
     __tablename__ = "market_prices"
 
-    id = Column(Integer, primary_key=True, index=True)
-    market_id = Column(Integer, ForeignKey("markets.id", ondelete="CASCADE"), nullable=False, index=True)
-    commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False, index=True)
+    id = Column(Integer, primary_key=True)
+    market_id = Column(Integer, ForeignKey("markets.id", ondelete="CASCADE"), nullable=False)
+    commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False)
     date = Column(Date, nullable=False, index=True)
     min_price_per_kg = Column(Numeric(10, 2), nullable=False)
     modal_price_per_kg = Column(Numeric(10, 2), nullable=False)
@@ -312,9 +330,9 @@ class MarketPrice(Base):
 class MarketArrival(Base):
     __tablename__ = "market_arrivals"
 
-    id = Column(Integer, primary_key=True, index=True)
-    market_id = Column(Integer, ForeignKey("markets.id", ondelete="CASCADE"), nullable=False, index=True)
-    commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False, index=True)
+    id = Column(Integer, primary_key=True)
+    market_id = Column(Integer, ForeignKey("markets.id", ondelete="CASCADE"), nullable=False)
+    commodity_id = Column(Integer, ForeignKey("commodities.id", ondelete="RESTRICT"), nullable=False)
     date = Column(Date, nullable=False, index=True)
     quantity_kg = Column(Numeric(12, 2), nullable=False)
     source = Column(String(50), default="synthetic", nullable=False)

@@ -2,15 +2,17 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.models.models import MarketPrice, MarketArrival, Market
+from app.models.models import MarketPrice, MarketArrival, Market, Commodity
 
 
 class ForecastResult(BaseModel):
     commodity_id: int
     commodity_code: str
+    commodity_name: Optional[str] = None
     target_metric: str  # "MODAL_PRICE" | "ARRIVALS"
     forecast_value: Decimal
     period: str  # e.g., "7_DAYS"
@@ -29,6 +31,13 @@ def forecast_price_trend(
     lookback_days: int = 14,
 ) -> ForecastResult:
     """Deterministic statistical price forecasting using weighted moving average over recent market observations."""
+    commodity = db.query(Commodity).filter(Commodity.id == commodity_id).first()
+    if not commodity:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Commodity with ID {commodity_id} not found",
+        )
+
     cutoff = date.today() - timedelta(days=lookback_days)
 
     prices = (
@@ -46,8 +55,9 @@ def forecast_price_trend(
     if not prices:
         # Fallback default if historical data window is empty
         return ForecastResult(
-            commodity_id=commodity_id,
-            commodity_code="POTATO",
+            commodity_id=commodity.id,
+            commodity_code=commodity.code,
+            commodity_name=commodity.name,
             target_metric="MODAL_PRICE",
             forecast_value=Decimal("20.00"),
             period="7_DAYS",
@@ -64,8 +74,9 @@ def forecast_price_trend(
     weighted_avg = weighted_sum / Decimal(sum(weights))
 
     return ForecastResult(
-        commodity_id=commodity_id,
-        commodity_code="POTATO",
+        commodity_id=commodity.id,
+        commodity_code=commodity.code,
+        commodity_name=commodity.name,
         target_metric="MODAL_PRICE",
         forecast_value=round(weighted_avg, 2),
         period="7_DAYS",

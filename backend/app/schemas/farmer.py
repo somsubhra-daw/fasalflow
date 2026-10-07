@@ -47,14 +47,15 @@ class CommoditySummary(BaseModel):
 class FarmerSupplyCreate(BaseModel):
     farm_id: int
     commodity_id: int
-    quantity_kg: Decimal = Field(..., gt=0, description="Quantity in kg must be > 0")
+    quantity_kg: Decimal = Field(..., gt=0, description="Declared harvest quantity in kg must be > 0")
     expected_harvest_date: date
     quality_grade: str = Field(default="A", max_length=20)
     status: SupplyStatus = Field(default=SupplyStatus.PLANNED)
 
 
 class FarmerSupplyUpdate(BaseModel):
-    quantity_kg: Optional[Decimal] = Field(None, gt=0)
+    quantity_kg: Optional[Decimal] = Field(None, gt=0, description="Update declared quantity")
+    remaining_quantity_kg: Optional[Decimal] = Field(None, ge=0, description="Update remaining unsold quantity")
     expected_harvest_date: Optional[date] = None
     quality_grade: Optional[str] = Field(None, max_length=20)
     status: Optional[SupplyStatus] = None
@@ -67,7 +68,12 @@ class FarmerSupplyResponse(BaseModel):
     commodity_id: int
     commodity_name: Optional[str] = None
     commodity_code: Optional[str] = None
-    quantity_kg: Decimal
+    
+    declared_quantity_kg: Decimal
+    remaining_quantity_kg: Decimal
+    quantity_kg: Decimal  # mirrors remaining_quantity_kg for backward compatibility
+    sold_quantity_kg: Decimal = Decimal(0)
+
     expected_harvest_date: date
     quality_grade: str
     status: SupplyStatus

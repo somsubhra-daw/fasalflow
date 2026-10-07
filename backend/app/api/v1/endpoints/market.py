@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.auth.dependencies import require_internal_worker
 from app.schemas.market import (
     MarketResponse,
     MarketPriceResponse,
@@ -113,8 +114,9 @@ def get_buyers(
 def add_buyer(
     data: BuyerCreate,
     db: Session = Depends(get_db),
+    _auth: None = Depends(require_internal_worker),
 ) -> BuyerResponse:
-    """Create supporting buyer entity."""
+    """Create supporting buyer entity. Restricted to trusted internal worker/ingestion."""
     return create_buyer(db=db, data=data)
 
 
@@ -140,6 +142,7 @@ def get_demands(
 def add_demand(
     data: BuyerDemandCreate,
     db: Session = Depends(get_db),
+    _auth: None = Depends(require_internal_worker),
 ) -> BuyerDemandResponse:
-    """Register buyer demand."""
+    """Register buyer demand. Restricted to trusted internal worker/ingestion."""
     return create_buyer_demand(db=db, data=data)

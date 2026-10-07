@@ -10,6 +10,7 @@ from app.models.models import (
     Farm,
     ColdStoreInventory,
     ColdStore,
+    Buyer,
     BuyerDemand,
     MarketPrice,
     Market,
@@ -22,6 +23,8 @@ from app.intelligence.features.metrics import MarketSupplyDemandMetrics
 ESTIMATED_POST_HARVEST_LOSS_RATE = Decimal("0.05")
 # Projected release rate from cold stores per week (e.g. 5% of storage balance)
 ESTIMATED_STORAGE_RELEASE_RATE = Decimal("0.05")
+# Minimum price change in INR/kg required to declare an UPWARD or DOWNWARD trend
+PRICE_TREND_THRESHOLD = Decimal("0.50")
 
 
 def calculate_shared_supply_demand(
@@ -43,16 +46,16 @@ def calculate_shared_supply_demand(
     if not commodity:
         raise ValueError(f"Commodity ID {commodity_id} not found")
 
-    # 1. Expected Fresh Supply: sum of farmer supply in district harvesting within window
+    # 1. Expected Fresh Supply: sum of farmer remaining supply in district harvesting within window
     fresh_supply_query = (
-        db.query(func.coalesce(func.sum(FarmerSupply.quantity_kg), Decimal(0)))
+        db.query(func.coalesce(func.sum(FarmerSupply.remaining_quantity_kg), Decimal(0)))
         .join(Farm, FarmerSupply.farm_id == Farm.id)
         .filter(
             FarmerSupply.commodity_id == commodity_id,
             Farm.district.ilike(f"%{district.strip()}%"),
             FarmerSupply.expected_harvest_date >= ref_date,
             FarmerSupply.expected_harvest_date <= end_date,
-            FarmerSupply.status.in_([SupplyStatus.PLANNED, SupplyStatus.READY]),
+            FarmerSupply.status.in_([SupplyStatus.PLANNED, SupplyStatus.READY, SupplyStatus.PARTIALLY_SOLD]),
         )
         .scalar()
     )
@@ -85,11 +88,14 @@ def calculate_shared_supply_demand(
     if effective_supply < 0:
         effective_supply = Decimal(0)
 
-    # 4. Forecast Demand: active buyer demands overlapping the window in district
+    # 4. Forecast Demand: active buyer demands strictly scoped to the target district overlapping the window
+    norm_district = district.strip().lower()
     demand_query = (
         db.query(func.coalesce(func.sum(BuyerDemand.quantity_kg), Decimal(0)))
+        .join(Buyer, BuyerDemand.buyer_id == Buyer.id)
         .filter(
             BuyerDemand.commodity_id == commodity_id,
+            func.lower(func.trim(Buyer.district)) == norm_district,
             BuyerDemand.status == DemandStatus.ACTIVE,
             BuyerDemand.required_from <= end_date,
             BuyerDemand.required_until >= ref_date,
@@ -109,28 +115,38 @@ def calculate_shared_supply_demand(
         status = "BALANCED"
 
     # 6. Current Modal Price & Trend
-    latest_prices = (
-        db.query(MarketPrice)
+    # Daily-aggregate modal prices across all markets in the district before comparing consecutive dates.
+    # Comparing different markets on the same date creates false trends; we must group by date first.
+    daily_price_rows = (
+        db.query(
+            MarketPrice.date,
+            func.avg(MarketPrice.modal_price_per_kg).label("avg_modal_price"),
+        )
         .join(Market, MarketPrice.market_id == Market.id)
         .filter(
             MarketPrice.commodity_id == commodity_id,
             Market.district.ilike(f"%{district.strip()}%"),
         )
+        .group_by(MarketPrice.date)
         .order_by(MarketPrice.date.desc())
         .limit(2)
         .all()
     )
 
     current_modal_price = None
-    price_trend = "STABLE"
-    if latest_prices:
-        current_modal_price = latest_prices[0].modal_price_per_kg
-        if len(latest_prices) > 1:
-            diff = latest_prices[0].modal_price_per_kg - latest_prices[1].modal_price_per_kg
-            if diff > Decimal("0.50"):
+    price_trend = None
+    if daily_price_rows:
+        price_trend = "STABLE"
+        current_modal_price = Decimal(str(round(daily_price_rows[0].avg_modal_price, 2)))
+        if len(daily_price_rows) > 1:
+            prev_modal_price = Decimal(str(round(daily_price_rows[1].avg_modal_price, 2)))
+            diff = current_modal_price - prev_modal_price
+            if diff > PRICE_TREND_THRESHOLD:
                 price_trend = "UPWARD"
-            elif diff < Decimal("-0.50"):
+            elif diff < -PRICE_TREND_THRESHOLD:
                 price_trend = "DOWNWARD"
+            else:
+                price_trend = "STABLE"
 
     return MarketSupplyDemandMetrics(
         commodity_id=commodity.id,
